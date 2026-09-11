@@ -1,0 +1,351 @@
+-- DanloHub + MODULE: Fly Pajaro
+-- SIN GUI.
+-- Pensado para cargarlo desde DanloHub +.
+--
+-- Comportamiento esperado:
+--   Check rojo  -> Start()   -> activa Fly Pajaro
+--   Check verde -> Destroy() -> desactiva Fly Pajaro
+--
+-- API compatible con DanloHub +:
+--   Start()
+--   Open()
+--   Close()
+--   Toggle()
+--   Destroy()
+--   IsRunning()
+--   IsLoading()
+
+local Module = {}
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+local ENV = getgenv and getgenv() or _G
+
+local STATE_KEY = "__DanloHubFlyPajaroModule"
+local SPEED = 50
+
+-- Animaciones del script original.
+local MOVE_ANIMATION_ID = 110309410329597
+local IDLE_ANIMATION_ID = 110863385954626
+
+-- Si por alguna razon este RAW se vuelve a ejecutar directamente,
+-- limpiamos la instancia anterior para no duplicar RenderStepped.
+local previous = ENV[STATE_KEY]
+
+if type(previous) == "table" then
+    pcall(function()
+        if previous.running and previous.humanoid then
+            previous.humanoid.PlatformStand = false
+        end
+    end)
+
+    pcall(function()
+        if previous.bodyVelocity then
+            previous.bodyVelocity.Parent = nil
+            previous.bodyVelocity:Destroy()
+        end
+    end)
+
+    pcall(function()
+        if previous.bodyGyro then
+            previous.bodyGyro.Parent = nil
+            previous.bodyGyro:Destroy()
+        end
+    end)
+
+    pcall(function()
+        if previous.renderConnection then
+            previous.renderConnection:Disconnect()
+        end
+    end)
+
+    pcall(function()
+        if previous.characterConnection then
+            previous.characterConnection:Disconnect()
+        end
+    end)
+end
+
+local State = {
+    running = false,
+    loading = false,
+
+    character = nil,
+    humanoid = nil,
+    rootPart = nil,
+
+    moveTrack = nil,
+    idleTrack = nil,
+
+    renderConnection = nil,
+    characterConnection = nil,
+
+    bodyVelocity = Instance.new("BodyVelocity"),
+    bodyGyro = Instance.new("BodyGyro")
+}
+
+ENV[STATE_KEY] = State
+
+State.bodyVelocity.Name = "DanloHubFlyPajaroVelocity"
+State.bodyVelocity.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+State.bodyVelocity.Velocity = Vector3.zero
+
+State.bodyGyro.Name = "DanloHubFlyPajaroGyro"
+State.bodyGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+State.bodyGyro.P = 10000
+State.bodyGyro.D = 500
+
+local function stopAnimations()
+    if State.moveTrack then
+        pcall(function()
+            State.moveTrack:Stop()
+        end)
+    end
+
+    if State.idleTrack then
+        pcall(function()
+            State.idleTrack:Stop()
+        end)
+    end
+end
+
+local function makeTrack(animator, animationId)
+    local animation = Instance.new("Animation")
+    animation.AnimationId = "rbxassetid://" .. tostring(animationId)
+
+    local track = animator:LoadAnimation(animation)
+    animation:Destroy()
+
+    track.Looped = true
+
+    return track
+end
+
+local function setupCharacter(character)
+    State.character = character
+    State.humanoid = character:WaitForChild("Humanoid")
+    State.rootPart = character:WaitForChild("HumanoidRootPart")
+
+    local animator = State.humanoid:FindFirstChildOfClass("Animator")
+
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = State.humanoid
+    end
+
+    stopAnimations()
+
+    State.moveTrack = makeTrack(animator, MOVE_ANIMATION_ID)
+    State.idleTrack = makeTrack(animator, IDLE_ANIMATION_ID)
+
+    -- Si el jugador respawnea mientras estaba marcado,
+    -- el Fly Pajaro se vuelve a aplicar al nuevo personaje.
+    if State.running then
+        State.bodyVelocity.Parent = State.rootPart
+        State.bodyGyro.CFrame = workspace.CurrentCamera.CFrame
+        State.bodyGyro.Parent = State.rootPart
+
+        State.humanoid.PlatformStand = true
+
+        if State.idleTrack and not State.idleTrack.IsPlaying then
+            State.idleTrack:Play()
+        end
+    end
+end
+
+setupCharacter(LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait())
+
+State.characterConnection = LocalPlayer.CharacterAdded:Connect(function(character)
+    setupCharacter(character)
+end)
+
+State.renderConnection = RunService.RenderStepped:Connect(function()
+    if not State.running
+        or not State.humanoid
+        or not State.rootPart then
+        return
+    end
+
+    local camera = workspace.CurrentCamera
+
+    if not camera then
+        return
+    end
+
+    local moveDirection = State.humanoid.MoveDirection
+    local cameraCFrame = camera.CFrame
+    local cameraPitch = cameraCFrame.LookVector.Y
+
+    local vertical = 0
+
+    -- Igual que la version limpia que probaste:
+    -- al moverte, mirar arriba/abajo controla la altura.
+    if moveDirection.Magnitude > 0 then
+        if cameraPitch > 0.3 or cameraPitch < -0.3 then
+            vertical = cameraPitch
+        end
+    end
+
+    local velocity = Vector3.new(
+        moveDirection.X,
+        vertical,
+        moveDirection.Z
+    )
+
+    if velocity.Magnitude > 0 then
+        velocity = velocity.Unit * SPEED
+
+        if State.idleTrack and State.idleTrack.IsPlaying then
+            State.idleTrack:Stop()
+        end
+
+        if State.moveTrack and not State.moveTrack.IsPlaying then
+            State.moveTrack:Play()
+        end
+    else
+        velocity = Vector3.zero
+
+        if State.moveTrack and State.moveTrack.IsPlaying then
+            State.moveTrack:Stop()
+        end
+
+        if State.idleTrack and not State.idleTrack.IsPlaying then
+            State.idleTrack:Play()
+        end
+    end
+
+    State.bodyVelocity.Velocity = velocity
+    State.bodyGyro.CFrame = cameraCFrame
+end)
+
+local function activate()
+    if State.running then
+        return true
+    end
+
+    if not State.humanoid
+        or not State.rootPart
+        or not State.humanoid.Parent
+        or not State.rootPart.Parent then
+        return false
+    end
+
+    local camera = workspace.CurrentCamera
+
+    if not camera then
+        return false
+    end
+
+    State.running = true
+
+    State.bodyVelocity.Velocity = Vector3.zero
+    State.bodyVelocity.Parent = State.rootPart
+
+    State.bodyGyro.CFrame = camera.CFrame
+    State.bodyGyro.Parent = State.rootPart
+
+    State.humanoid.PlatformStand = true
+
+    if State.moveTrack then
+        State.moveTrack:Stop()
+    end
+
+    if State.idleTrack and not State.idleTrack.IsPlaying then
+        State.idleTrack:Play()
+    end
+
+    return true
+end
+
+local function deactivate()
+    State.running = false
+
+    pcall(function()
+        State.bodyVelocity.Velocity = Vector3.zero
+        State.bodyVelocity.Parent = nil
+    end)
+
+    pcall(function()
+        State.bodyGyro.Parent = nil
+    end)
+
+    if State.humanoid then
+        pcall(function()
+            State.humanoid.PlatformStand = false
+        end)
+    end
+
+    stopAnimations()
+
+    return true
+end
+
+function Module.Start()
+    return activate()
+end
+
+-- Para este modulo Open significa simplemente activar.
+-- NO crea ninguna interfaz.
+function Module.Open()
+    return activate()
+end
+
+function Module.Close()
+    return deactivate()
+end
+
+function Module.Toggle()
+    if State.running then
+        return deactivate()
+    end
+
+    return activate()
+end
+
+function Module.Destroy()
+    deactivate()
+
+    if State.renderConnection then
+        pcall(function()
+            State.renderConnection:Disconnect()
+        end)
+        State.renderConnection = nil
+    end
+
+    if State.characterConnection then
+        pcall(function()
+            State.characterConnection:Disconnect()
+        end)
+        State.characterConnection = nil
+    end
+
+    pcall(function()
+        State.bodyVelocity:Destroy()
+    end)
+
+    pcall(function()
+        State.bodyGyro:Destroy()
+    end)
+
+    State.moveTrack = nil
+    State.idleTrack = nil
+    State.character = nil
+    State.humanoid = nil
+    State.rootPart = nil
+
+    ENV[STATE_KEY] = nil
+
+    return true
+end
+
+function Module.IsRunning()
+    return State.running == true
+end
+
+function Module.IsLoading()
+    return false
+end
+
+return Module
