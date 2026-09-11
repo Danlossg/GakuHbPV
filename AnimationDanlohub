@@ -1,0 +1,754 @@
+-- DanloHub Animations MODULE
+-- Subelo como: modules/animations.lua
+--
+-- Este archivo NO crea el menu DanloHub +.
+-- Solo devuelve un modulo con:
+--   Start()
+--   Open()
+--   Close()
+--   Toggle()
+--   Destroy()
+--   IsRunning()
+--
+-- Uso desde el launcher:
+-- local Animations = loadstring(game:HttpGet("TU_RAW/animations.lua"))()
+-- Animations.Start()
+
+local Module = {}
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local ENV = getgenv and getgenv() or _G
+
+local ORIGINAL_URL = "https://raw.githubusercontent.com/Bac0nHck/Scripts/refs/heads/main/BundleAnimations.lua"
+
+local LOGO_URL = "https://raw.githubusercontent.com/Danlossg/RangosDanloHub-Imagenes/main/avatar.png"
+local LOGO_FOLDER = "DanloHubAssets"
+local LOGO_FILE = LOGO_FOLDER .. "/avatar.png"
+
+local STATE_KEY = "__DanloHubAnimationsModule"
+local LOADING_NAME = "DanloHubAnimations_ModuleLoading"
+
+local oldState = ENV[STATE_KEY]
+
+if type(oldState) == "table" and type(oldState.connections) == "table" then
+    for _, connection in ipairs(oldState.connections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+end
+
+local State = {
+    enabled = false,
+    loading = false,
+    animMain = nil,
+    animScreen = nil,
+    title = nil,
+    loadingGui = nil,
+    pulseTween = nil,
+    connections = {},
+    relatedScreens = setmetatable({}, {__mode = "k"})
+}
+
+ENV[STATE_KEY] = State
+
+local function keep(connection)
+    table.insert(State.connections, connection)
+    return connection
+end
+
+local function clearConnections()
+    for _, connection in ipairs(State.connections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+
+    table.clear(State.connections)
+end
+
+local function getRoots()
+    local result = {}
+    local seen = {}
+
+    local function add(obj)
+        if obj and not seen[obj] then
+            seen[obj] = true
+            table.insert(result, obj)
+        end
+    end
+
+    pcall(function()
+        if gethui then
+            add(gethui())
+        end
+    end)
+
+    add(PlayerGui)
+    add(CoreGui)
+
+    return result
+end
+
+local function getGuiParent()
+    local parent = PlayerGui
+
+    pcall(function()
+        if gethui then
+            local hui = gethui()
+            if hui then
+                parent = hui
+            end
+        end
+    end)
+
+    return parent
+end
+
+local function getText(obj)
+    if obj and (
+        obj:IsA("TextLabel")
+        or obj:IsA("TextButton")
+        or obj:IsA("TextBox")
+    ) then
+        local ok, value = pcall(function()
+            return obj.Text
+        end)
+
+        if ok then
+            return tostring(value or "")
+        end
+    end
+
+    return ""
+end
+
+local function getScreenGui(obj)
+    local current = obj
+
+    while current do
+        if current:IsA("ScreenGui") then
+            return current
+        end
+
+        current = current.Parent
+    end
+
+    return nil
+end
+
+local function addCorner(parent, radius)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, radius or 8)
+    corner.Parent = parent
+end
+
+local function getLogoAsset()
+    if ENV.__DanloHubLogoAsset then
+        return ENV.__DanloHubLogoAsset
+    end
+
+    local asset = nil
+
+    local function resolveLocal()
+        if getsynasset then
+            local ok, value = pcall(function()
+                return getsynasset(LOGO_FILE)
+            end)
+
+            if ok and value then
+                return value
+            end
+        end
+
+        if getcustomasset then
+            local ok, value = pcall(function()
+                return getcustomasset(LOGO_FILE)
+            end)
+
+            if ok and value then
+                return value
+            end
+        end
+
+        return nil
+    end
+
+    pcall(function()
+        if isfile and isfile(LOGO_FILE) then
+            asset = resolveLocal()
+        end
+    end)
+
+    if not asset and writefile then
+        pcall(function()
+            if makefolder then
+                local createFolder = true
+
+                if isfolder then
+                    createFolder = not isfolder(LOGO_FOLDER)
+                end
+
+                if createFolder then
+                    makefolder(LOGO_FOLDER)
+                end
+            end
+
+            local bytes = game:HttpGet(LOGO_URL)
+            writefile(LOGO_FILE, bytes)
+
+            asset = resolveLocal()
+        end)
+    end
+
+    ENV.__DanloHubLogoAsset = asset
+    return asset
+end
+
+local function hideLoading()
+    if State.pulseTween then
+        pcall(function()
+            State.pulseTween:Cancel()
+        end)
+
+        State.pulseTween = nil
+    end
+
+    if State.loadingGui then
+        pcall(function()
+            State.loadingGui:Destroy()
+        end)
+
+        State.loadingGui = nil
+    end
+end
+
+local function showLoading()
+    hideLoading()
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = LOADING_NAME
+    gui.ResetOnSpawn = false
+    gui.DisplayOrder = 2147483647
+    gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+
+    pcall(function()
+        gui.IgnoreGuiInset = true
+    end)
+
+    pcall(function()
+        gui.ScreenInsets = Enum.ScreenInsets.None
+    end)
+
+    gui.Parent = getGuiParent()
+    State.loadingGui = gui
+
+    local blocker = Instance.new("TextButton")
+    blocker.Size = UDim2.fromScale(1, 1)
+    blocker.Position = UDim2.fromScale(0, 0)
+    blocker.BackgroundColor3 = Color3.fromRGB(7, 7, 10)
+    blocker.BackgroundTransparency = 0
+    blocker.BorderSizePixel = 0
+    blocker.AutoButtonColor = false
+    blocker.Text = ""
+    blocker.Modal = true
+    blocker.ZIndex = 100
+    blocker.Parent = gui
+
+    local card = Instance.new("Frame")
+    card.AnchorPoint = Vector2.new(0.5, 0.5)
+    card.Position = UDim2.fromScale(0.5, 0.5)
+    card.Size = UDim2.fromOffset(480, 280)
+    card.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+    card.BorderSizePixel = 0
+    card.ZIndex = 101
+    card.Parent = blocker
+    addCorner(card, 14)
+
+    local border = Instance.new("UIStroke")
+    border.Color = Color3.fromRGB(88, 38, 52)
+    border.Thickness = 1
+    border.Transparency = 0.05
+    border.Parent = card
+
+    local logo = Instance.new("ImageLabel")
+    logo.AnchorPoint = Vector2.new(0.5, 0.5)
+    logo.Position = UDim2.new(0.5, 0, 0.5, -42)
+    logo.Size = UDim2.fromOffset(78, 78)
+    logo.BackgroundTransparency = 1
+    logo.BorderSizePixel = 0
+    logo.ZIndex = 102
+    logo.Parent = card
+    addCorner(logo, 16)
+
+    local asset = getLogoAsset()
+
+    if asset then
+        logo.Image = asset
+    end
+
+    local title = Instance.new("TextLabel")
+    title.AnchorPoint = Vector2.new(0.5, 0)
+    title.Position = UDim2.new(0.5, 0, 0.5, 18)
+    title.Size = UDim2.new(1, -40, 0, 30)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.Text = "CARGANDO DANLOHUB ANIMATIONS..."
+    title.TextSize = 15
+    title.TextColor3 = Color3.fromRGB(255, 70, 105)
+    title.ZIndex = 102
+    title.Parent = card
+
+    local subtitle = Instance.new("TextLabel")
+    subtitle.AnchorPoint = Vector2.new(0.5, 0)
+    subtitle.Position = UDim2.new(0.5, 0, 0.5, 50)
+    subtitle.Size = UDim2.new(1, -40, 0, 24)
+    subtitle.BackgroundTransparency = 1
+    subtitle.Font = Enum.Font.Gotham
+    subtitle.Text = "Preparando interfaz..."
+    subtitle.TextSize = 12
+    subtitle.TextColor3 = Color3.fromRGB(185, 185, 195)
+    subtitle.ZIndex = 102
+    subtitle.Parent = card
+
+    State.pulseTween = TweenService:Create(
+        logo,
+        TweenInfo.new(
+            0.75,
+            Enum.EasingStyle.Sine,
+            Enum.EasingDirection.InOut,
+            -1,
+            true
+        ),
+        {
+            ImageTransparency = 0.32
+        }
+    )
+
+    State.pulseTween:Play()
+end
+
+local function findBundleScreen()
+    for _, root in ipairs(getRoots()) do
+        local exact = root:FindFirstChild("BundleAnimGui", true)
+
+        if exact and exact:IsA("ScreenGui") then
+            return exact
+        end
+    end
+
+    for _, root in ipairs(getRoots()) do
+        for _, obj in ipairs(root:GetDescendants()) do
+            local upper = string.upper(getText(obj))
+
+            if upper == "BUNDLE ANIMATIONS"
+                or upper == "DANLOHUB ANIMATIONS" then
+
+                return getScreenGui(obj)
+            end
+        end
+    end
+
+    return nil
+end
+
+local function findTitle(screen)
+    if not screen then
+        return nil
+    end
+
+    for _, obj in ipairs(screen:GetDescendants()) do
+        local upper = string.upper(getText(obj))
+
+        if upper == "BUNDLE ANIMATIONS"
+            or upper == "DANLOHUB ANIMATIONS" then
+
+            return obj
+        end
+    end
+
+    return nil
+end
+
+local function patchHeader(screen, title)
+    if not screen or not title or not title.Parent then
+        return false
+    end
+
+    local header = title.Parent
+    local main = header.Parent
+
+    if not main or not main:IsA("GuiObject") then
+        return false
+    end
+
+    State.animScreen = screen
+    State.animMain = main
+    State.title = title
+
+    pcall(function()
+        title.Text = "DANLOHUB ANIMATIONS"
+        title.TextColor3 = Color3.fromRGB(255, 70, 105)
+        title.Font = Enum.Font.GothamBold
+        title.TextXAlignment = Enum.TextXAlignment.Left
+        title.Position = UDim2.new(0, 48, 0, 0)
+        title.Size = UDim2.new(1, -90, 1, 0)
+    end)
+
+    for _, child in ipairs(header:GetChildren()) do
+        if child ~= title
+            and child.Name ~= "DanloHubCustomLogo"
+            and (
+                child:IsA("GuiButton")
+                or child:IsA("ImageButton")
+                or child:IsA("ImageLabel")
+            ) then
+
+            if child.AbsolutePosition.X < title.AbsolutePosition.X then
+                pcall(function()
+                    child:Destroy()
+                end)
+            end
+        end
+    end
+
+    local oldLogo = header:FindFirstChild("DanloHubCustomLogo")
+
+    if oldLogo then
+        oldLogo:Destroy()
+    end
+
+    local logo = Instance.new("ImageLabel")
+    logo.Name = "DanloHubCustomLogo"
+    logo.BackgroundTransparency = 1
+    logo.BorderSizePixel = 0
+    logo.Position = UDim2.fromOffset(12, 9)
+    logo.Size = UDim2.fromOffset(26, 26)
+    logo.ZIndex = title.ZIndex
+    logo.Parent = header
+    addCorner(logo, 6)
+
+    local asset = getLogoAsset()
+
+    if asset then
+        logo.Image = asset
+    end
+
+    return true
+end
+
+local PROMO_WORDS = {
+    "t.me/arceusxcommunity",
+    "join my channel",
+    "free scripts here",
+    "copy link",
+    "hide for now",
+    "don't show again",
+    "dont show again"
+}
+
+local function isPromo(text)
+    text = string.lower(tostring(text or ""))
+
+    for _, word in ipairs(PROMO_WORDS) do
+        if string.find(text, word, 1, true) then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function cleanupExtras()
+    for _, root in ipairs(getRoots()) do
+        local framesToHide = {}
+
+        for _, obj in ipairs(root:GetDescendants()) do
+            if obj:IsA("TextLabel")
+                or obj:IsA("TextButton")
+                or obj:IsA("TextBox") then
+
+                if isPromo(getText(obj)) then
+                    local current = obj
+
+                    for _ = 1, 12 do
+                        if not current then
+                            break
+                        end
+
+                        if current:IsA("Frame") then
+                            framesToHide[current] = true
+                        end
+
+                        if current:IsA("ScreenGui") then
+                            break
+                        end
+
+                        current = current.Parent
+                    end
+                end
+            end
+        end
+
+        for frame in pairs(framesToHide) do
+            pcall(function()
+                frame.Visible = false
+            end)
+        end
+    end
+
+    if State.animScreen and State.animMain then
+        for _, obj in ipairs(State.animScreen:GetDescendants()) do
+            if obj:IsA("GuiButton")
+                and not obj:IsDescendantOf(State.animMain) then
+
+                local size = obj.AbsoluteSize
+
+                if size.X <= 110 and size.Y <= 110 then
+                    local text = getText(obj)
+                    local play = (
+                        text == ">"
+                        or text == "▶"
+                        or text == "►"
+                        or text == "▷"
+                    )
+
+                    if not play then
+                        for _, d in ipairs(obj:GetDescendants()) do
+                            local t = getText(d)
+
+                            if t == ">"
+                                or t == "▶"
+                                or t == "►"
+                                or t == "▷" then
+
+                                play = true
+                                break
+                            end
+                        end
+                    end
+
+                    if play then
+                        pcall(function()
+                            obj:Destroy()
+                        end)
+                    end
+                end
+            end
+        end
+    end
+end
+
+local function attachTitleProtection()
+    clearConnections()
+
+    if State.title and State.title.Parent then
+        keep(State.title:GetPropertyChangedSignal("Text"):Connect(function()
+            if State.enabled
+                and State.title
+                and State.title.Parent
+                and string.upper(getText(State.title)) ~= "DANLOHUB ANIMATIONS" then
+
+                State.title.Text = "DANLOHUB ANIMATIONS"
+                State.title.TextColor3 = Color3.fromRGB(255, 70, 105)
+            end
+        end))
+    end
+end
+
+function Module.Start()
+    if State.loading then
+        return false, "loading"
+    end
+
+    local existing = findBundleScreen()
+
+    if existing then
+        local title = findTitle(existing)
+
+        if title then
+            State.enabled = true
+            State.loading = false
+
+            pcall(function()
+                existing.Enabled = false
+            end)
+
+            patchHeader(existing, title)
+            cleanupExtras()
+            attachTitleProtection()
+
+            pcall(function()
+                existing.Enabled = true
+            end)
+
+            if State.animMain then
+                State.animMain.Visible = true
+            end
+
+            return true
+        end
+    end
+
+    State.loading = true
+    State.enabled = false
+
+    showLoading()
+
+    task.spawn(function()
+        local ok, err = pcall(function()
+            local source = game:HttpGet(ORIGINAL_URL)
+            local fn, compileErr = loadstring(source)
+
+            if not fn then
+                error(compileErr or "No se pudo compilar BundleAnimations.lua")
+            end
+
+            fn()
+        end)
+
+        if not ok then
+            warn("[DanloHub Animations Module] Loader:", err)
+        end
+    end)
+
+    task.spawn(function()
+        local screen = nil
+        local title = nil
+
+        for _ = 1, 80 do
+            screen = findBundleScreen()
+
+            if screen then
+                title = findTitle(screen)
+
+                if title then
+                    break
+                end
+            end
+
+            task.wait(0.10)
+        end
+
+        if not screen or not title then
+            State.loading = false
+            State.enabled = false
+            hideLoading()
+
+            warn("[DanloHub Animations Module] No se encontro la interfaz.")
+            return
+        end
+
+        pcall(function()
+            screen.Enabled = false
+        end)
+
+        for _ = 1, 5 do
+            patchHeader(screen, title)
+            cleanupExtras()
+            task.wait(0.08)
+        end
+
+        State.enabled = true
+        State.loading = false
+
+        attachTitleProtection()
+
+        patchHeader(screen, title)
+        cleanupExtras()
+
+        pcall(function()
+            screen.Enabled = true
+        end)
+
+        if State.animMain then
+            State.animMain.Visible = true
+        end
+
+        hideLoading()
+
+        -- Only finite late cleanup passes.
+        task.delay(0.30, cleanupExtras)
+        task.delay(1.00, cleanupExtras)
+        task.delay(2.50, cleanupExtras)
+    end)
+
+    return true
+end
+
+function Module.Open()
+    if not State.enabled then
+        return Module.Start()
+    end
+
+    if State.animMain and State.animMain.Parent then
+        cleanupExtras()
+        State.animMain.Visible = true
+        return true
+    end
+
+    State.enabled = false
+    return Module.Start()
+end
+
+function Module.Close()
+    if State.animMain and State.animMain.Parent then
+        State.animMain.Visible = false
+        return true
+    end
+
+    return false
+end
+
+function Module.Toggle()
+    if not State.enabled then
+        return Module.Start()
+    end
+
+    if State.animMain and State.animMain.Parent then
+        if State.animMain.Visible then
+            return Module.Close()
+        else
+            return Module.Open()
+        end
+    end
+
+    State.enabled = false
+    return Module.Start()
+end
+
+function Module.Destroy()
+    State.enabled = false
+    State.loading = false
+
+    hideLoading()
+    clearConnections()
+
+    if State.animScreen and State.animScreen.Parent then
+        pcall(function()
+            State.animScreen:Destroy()
+        end)
+    end
+
+    State.animMain = nil
+    State.animScreen = nil
+    State.title = nil
+
+    return true
+end
+
+function Module.IsRunning()
+    return State.enabled == true
+end
+
+function Module.IsLoading()
+    return State.loading == true
+end
+
+return Module
