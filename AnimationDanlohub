@@ -1,4 +1,4 @@
--- DanloHub Animations MODULE
+-- DanloHub Animations MODULE v2 - Launcher Safe
 -- Subelo como: modules/animations.lua
 --
 -- Este archivo NO crea el menu DanloHub +.
@@ -141,6 +141,42 @@ local function getScreenGui(obj)
     end
 
     return nil
+end
+
+
+local function isDanloHubPlusLauncherScreen(screen)
+    if not screen or not screen:IsA("ScreenGui") then
+        return false
+    end
+
+    -- Base modular v3 marks itself explicitly.
+    local ok, marked = pcall(function()
+        return screen:GetAttribute("DanloHubPlusLauncher") == true
+    end)
+
+    if ok and marked then
+        return true
+    end
+
+    -- Compatibility with v1/v2 launcher names.
+    local name = tostring(screen.Name or "")
+
+    if name == "DanloHubPlus_Base"
+        or string.find(name, "DanloHubPlus", 1, true)
+        or string.find(name, "DanloHubPlus_Base", 1, true) then
+        return true
+    end
+
+    -- Last-resort semantic guard:
+    -- if this ScreenGui contains the DANLOHUB + title, it is the launcher,
+    -- NOT the original Bundle Animations GUI.
+    for _, obj in ipairs(screen:GetDescendants()) do
+        if string.upper(getText(obj)) == "DANLOHUB +" then
+            return true
+        end
+    end
+
+    return false
 end
 
 local function addCorner(parent, radius)
@@ -335,14 +371,20 @@ local function showLoading()
 end
 
 local function findBundleScreen()
+    -- 1) Prefer the actual original ScreenGui by name.
     for _, root in ipairs(getRoots()) do
         local exact = root:FindFirstChild("BundleAnimGui", true)
 
-        if exact and exact:IsA("ScreenGui") then
+        if exact
+            and exact:IsA("ScreenGui")
+            and not isDanloHubPlusLauncherScreen(exact) then
+
             return exact
         end
     end
 
+    -- 2) Fallback: only accept a ScreenGui that contains the animation title
+    -- AND is definitely not the DanloHub + launcher.
     for _, root in ipairs(getRoots()) do
         for _, obj in ipairs(root:GetDescendants()) do
             local upper = string.upper(getText(obj))
@@ -350,7 +392,13 @@ local function findBundleScreen()
             if upper == "BUNDLE ANIMATIONS"
                 or upper == "DANLOHUB ANIMATIONS" then
 
-                return getScreenGui(obj)
+                local screen = getScreenGui(obj)
+
+                if screen
+                    and not isDanloHubPlusLauncherScreen(screen) then
+
+                    return screen
+                end
             end
         end
     end
@@ -359,7 +407,7 @@ local function findBundleScreen()
 end
 
 local function findTitle(screen)
-    if not screen then
+    if not screen or isDanloHubPlusLauncherScreen(screen) then
         return nil
     end
 
@@ -377,7 +425,10 @@ local function findTitle(screen)
 end
 
 local function patchHeader(screen, title)
-    if not screen or not title or not title.Parent then
+    if not screen
+        or not title
+        or not title.Parent
+        or isDanloHubPlusLauncherScreen(screen) then
         return false
     end
 
@@ -614,7 +665,7 @@ function Module.Start()
         end)
 
         if not ok then
-            warn("[DanloHub Animations Module] Loader:", err)
+            warn("[DanloHub Animations Module v2] Loader:", err)
         end
     end)
 
@@ -641,7 +692,7 @@ function Module.Start()
             State.enabled = false
             hideLoading()
 
-            warn("[DanloHub Animations Module] No se encontro la interfaz.")
+            warn("[DanloHub Animations Module v2] No se encontro la interfaz.")
             return
         end
 
@@ -730,7 +781,10 @@ function Module.Destroy()
     hideLoading()
     clearConnections()
 
-    if State.animScreen and State.animScreen.Parent then
+    if State.animScreen
+        and State.animScreen.Parent
+        and not isDanloHubPlusLauncherScreen(State.animScreen) then
+
         pcall(function()
             State.animScreen:Destroy()
         end)
