@@ -1,4 +1,4 @@
--- DanloHub Animations MODULE v3 - Full Loading Shield
+-- DanloHub Animations MODULE v4 - Absolute Loading Shield
 -- Subelo como: modules/animations.lua
 --
 -- Este archivo NO crea el menu DanloHub +.
@@ -55,6 +55,7 @@ local State = {
     connections = {},
     shieldConnections = {},
     shieldedScreens = setmetatable({}, {__mode = "k"}),
+    shieldedObjects = setmetatable({}, {__mode = "k"}),
     relatedScreens = setmetatable({}, {__mode = "k"})
 }
 
@@ -267,7 +268,16 @@ local function clearLoadingShield()
         end
     end
 
+    for obj, wasVisible in pairs(State.shieldedObjects) do
+        if obj and obj.Parent then
+            pcall(function()
+                obj.Visible = wasVisible
+            end)
+        end
+    end
+
     State.shieldedScreens = setmetatable({}, {__mode = "k"})
+    State.shieldedObjects = setmetatable({}, {__mode = "k"})
 end
 
 local function shieldScreen(screen)
@@ -296,6 +306,71 @@ local function shieldScreen(screen)
     end)
 end
 
+
+local function shieldGuiObject(obj)
+    if not obj or not obj:IsA("GuiObject") then
+        return
+    end
+
+    if State.loadingGui and obj:IsDescendantOf(State.loadingGui) then
+        return
+    end
+
+    if State.shieldedObjects[obj] ~= nil then
+        return
+    end
+
+    local wasVisible = true
+
+    pcall(function()
+        wasVisible = obj.Visible
+    end)
+
+    State.shieldedObjects[obj] = wasVisible
+
+    pcall(function()
+        obj.Visible = false
+    end)
+end
+
+local function shouldShieldCombatObject(obj)
+    if not obj then
+        return false
+    end
+
+    if not (
+        obj:IsA("TextButton")
+        or obj:IsA("TextLabel")
+        or obj:IsA("TextBox")
+    ) then
+        return false
+    end
+
+    local text = string.upper(getText(obj))
+
+    return string.find(text, "SIN COMBATE", 1, true) ~= nil
+        or string.find(text, "COMBATE:", 1, true) ~= nil
+end
+
+local function shieldCombatOverlaysOnce()
+    for _, root in ipairs(getRoots()) do
+        for _, obj in ipairs(root:GetDescendants()) do
+            if shouldShieldCombatObject(obj) then
+                -- Hide the button/container itself temporarily.
+                if obj:IsA("GuiObject") then
+                    shieldGuiObject(obj)
+                end
+
+                local parent = obj.Parent
+
+                if parent and parent:IsA("GuiObject") then
+                    shieldGuiObject(parent)
+                end
+            end
+        end
+    end
+end
+
 local function startLoadingShield()
     clearLoadingShield()
 
@@ -309,10 +384,13 @@ local function startLoadingShield()
         end
     end
 
-    -- PlayerGui contains the game's own buttons such as COMBATE.
+    -- PlayerGui contains normal game interfaces.
     addRoot(PlayerGui)
 
-    -- Executor GUI root, if available.
+    -- CoreGui/gethui can contain executor/custom interfaces such as
+    -- the SIN COMBATE button seen above the loading screen.
+    addRoot(CoreGui)
+
     pcall(function()
         if gethui then
             addRoot(gethui())
@@ -343,7 +421,29 @@ local function startLoadingShield()
         end)
 
         table.insert(State.shieldConnections, connection)
+
+        -- TEMPORARY during loading only: catch nested combat overlays
+        -- created inside an already-existing ScreenGui.
+        local descendantConnection = root.DescendantAdded:Connect(function(obj)
+            if State.loading and shouldShieldCombatObject(obj) then
+                task.defer(function()
+                    if State.loading and obj and obj.Parent then
+                        shieldGuiObject(obj)
+
+                        local parent = obj.Parent
+                        if parent and parent:IsA("GuiObject") then
+                            shieldGuiObject(parent)
+                        end
+                    end
+                end)
+            end
+        end)
+
+        table.insert(State.shieldConnections, descendantConnection)
     end
+
+    -- Hide combat overlays that already existed before loading started.
+    shieldCombatOverlaysOnce()
 end
 
 local function hideLoading()
@@ -480,6 +580,26 @@ local function showLoading()
     -- during loading, disable every other ScreenGui from PlayerGui/gethui.
     -- This covers buttons that use their own DisplayOrder, like COMBATE.
     startLoadingShield()
+
+    -- A few very cheap delayed passes in case that combat badge updates
+    -- its text/visibility a fraction later.
+    task.delay(0.10, function()
+        if State.loading then
+            shieldCombatOverlaysOnce()
+        end
+    end)
+
+    task.delay(0.35, function()
+        if State.loading then
+            shieldCombatOverlaysOnce()
+        end
+    end)
+
+    task.delay(0.80, function()
+        if State.loading then
+            shieldCombatOverlaysOnce()
+        end
+    end)
 end
 
 local function findBundleScreen()
@@ -779,7 +899,7 @@ function Module.Start()
         end)
 
         if not ok then
-            warn("[DanloHub Animations Module v3] Loader:", err)
+            warn("[DanloHub Animations Module v4] Loader:", err)
         end
     end)
 
@@ -806,7 +926,7 @@ function Module.Start()
             State.enabled = false
             hideLoading()
 
-            warn("[DanloHub Animations Module v3] No se encontro la interfaz.")
+            warn("[DanloHub Animations Module v4] No se encontro la interfaz.")
             return
         end
 
@@ -922,4 +1042,4 @@ function Module.IsLoading()
     return State.loading == true
 end
 
-return 
+return Module
