@@ -1,4 +1,4 @@
--- DanloHub Animations MODULE v4 - Absolute Loading Shield
+-- DanloHub Animations MODULE v5 - MultiLayer Loading Shield
 -- Subelo como: modules/animations.lua
 --
 -- Este archivo NO crea el menu DanloHub +.
@@ -51,6 +51,7 @@ local State = {
     animScreen = nil,
     title = nil,
     loadingGui = nil,
+    loadingGuis = {},
     pulseTween = nil,
     connections = {},
     shieldConnections = {},
@@ -289,6 +290,16 @@ local function shieldScreen(screen)
         return
     end
 
+    for _, loadingScreen in ipairs(State.loadingGuis) do
+        if screen == loadingScreen then
+            return
+        end
+    end
+
+    if string.find(tostring(screen.Name or ""), "DanloHubAnimationsLoadingCoverV5", 1, true) then
+        return
+    end
+
     if State.shieldedScreens[screen] ~= nil then
         return
     end
@@ -314,6 +325,12 @@ local function shieldGuiObject(obj)
 
     if State.loadingGui and obj:IsDescendantOf(State.loadingGui) then
         return
+    end
+
+    for _, loadingScreen in ipairs(State.loadingGuis) do
+        if loadingScreen and loadingScreen.Parent and obj:IsDescendantOf(loadingScreen) then
+            return
+        end
     end
 
     if State.shieldedObjects[obj] ~= nil then
@@ -446,31 +463,36 @@ local function startLoadingShield()
     shieldCombatOverlaysOnce()
 end
 
-local function hideLoading()
+local function destroyLoadingLayers()
     if State.pulseTween then
         pcall(function()
             State.pulseTween:Cancel()
         end)
-
         State.pulseTween = nil
     end
 
-    if State.loadingGui then
+    for _, gui in ipairs(State.loadingGuis) do
         pcall(function()
-            State.loadingGui:Destroy()
+            gui:Destroy()
         end)
-
-        State.loadingGui = nil
     end
 
+    table.clear(State.loadingGuis)
+    State.loadingGui = nil
+end
+
+local function hideLoading()
+    destroyLoadingLayers()
     clearLoadingShield()
 end
 
-local function showLoading()
-    hideLoading()
+local function createLoadingLayer(parent, withCard, index)
+    if not parent then
+        return nil
+    end
 
     local gui = Instance.new("ScreenGui")
-    gui.Name = LOADING_NAME
+    gui.Name = "DanloHubAnimationsLoadingCoverV5_" .. tostring(index)
     gui.ResetOnSpawn = false
     gui.DisplayOrder = 2147483647
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
@@ -488,13 +510,21 @@ local function showLoading()
         gui.ClipToDeviceSafeArea = false
     end)
 
-    gui.Parent = getGuiParent()
-    State.loadingGui = gui
+    local ok = pcall(function()
+        gui.Parent = parent
+    end)
+
+    if not ok or not gui.Parent then
+        pcall(function()
+            gui:Destroy()
+        end)
+        return nil
+    end
 
     local blocker = Instance.new("TextButton")
-    blocker.Name = "FULLSCREEN_LOADING_BLOCKER"
-    blocker.Position = UDim2.new(0, -40, 0, -40)
-    blocker.Size = UDim2.new(1, 80, 1, 80)
+    blocker.Name = "ABSOLUTE_FULLSCREEN_BLOCKER"
+    blocker.Position = UDim2.new(0, -80, 0, -80)
+    blocker.Size = UDim2.new(1, 160, 1, 160)
     blocker.BackgroundColor3 = Color3.fromRGB(7, 7, 10)
     blocker.BackgroundTransparency = 0
     blocker.BorderSizePixel = 0
@@ -504,100 +534,140 @@ local function showLoading()
     blocker.ZIndex = 2147483000
     blocker.Parent = gui
 
-    local card = Instance.new("Frame")
-    card.AnchorPoint = Vector2.new(0.5, 0.5)
-    card.Position = UDim2.fromScale(0.5, 0.5)
-    card.Size = UDim2.fromOffset(480, 280)
-    card.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
-    card.BorderSizePixel = 0
-    card.ZIndex = 2147483001
-    card.Parent = blocker
-    addCorner(card, 14)
+    if withCard then
+        local card = Instance.new("Frame")
+        card.AnchorPoint = Vector2.new(0.5, 0.5)
+        card.Position = UDim2.fromScale(0.5, 0.5)
+        card.Size = UDim2.fromOffset(480, 280)
+        card.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
+        card.BorderSizePixel = 0
+        card.ZIndex = 2147483001
+        card.Parent = blocker
+        addCorner(card, 14)
 
-    local border = Instance.new("UIStroke")
-    border.Color = Color3.fromRGB(88, 38, 52)
-    border.Thickness = 1
-    border.Transparency = 0.05
-    border.Parent = card
+        local border = Instance.new("UIStroke")
+        border.Color = Color3.fromRGB(88, 38, 52)
+        border.Thickness = 1
+        border.Transparency = 0.05
+        border.Parent = card
 
-    local logo = Instance.new("ImageLabel")
-    logo.AnchorPoint = Vector2.new(0.5, 0.5)
-    logo.Position = UDim2.new(0.5, 0, 0.5, -42)
-    logo.Size = UDim2.fromOffset(78, 78)
-    logo.BackgroundTransparency = 1
-    logo.BorderSizePixel = 0
-    logo.ZIndex = 2147483002
-    logo.Parent = card
-    addCorner(logo, 16)
+        local logo = Instance.new("ImageLabel")
+        logo.AnchorPoint = Vector2.new(0.5, 0.5)
+        logo.Position = UDim2.new(0.5, 0, 0.5, -42)
+        logo.Size = UDim2.fromOffset(78, 78)
+        logo.BackgroundTransparency = 1
+        logo.BorderSizePixel = 0
+        logo.ZIndex = 2147483002
+        logo.Parent = card
+        addCorner(logo, 16)
 
-    local asset = getLogoAsset()
+        local asset = getLogoAsset()
+        if asset then
+            logo.Image = asset
+        end
 
-    if asset then
-        logo.Image = asset
+        local title = Instance.new("TextLabel")
+        title.AnchorPoint = Vector2.new(0.5, 0)
+        title.Position = UDim2.new(0.5, 0, 0.5, 18)
+        title.Size = UDim2.new(1, -40, 0, 30)
+        title.BackgroundTransparency = 1
+        title.Font = Enum.Font.GothamBold
+        title.Text = "CARGANDO DANLOHUB ANIMATIONS..."
+        title.TextSize = 15
+        title.TextColor3 = Color3.fromRGB(255, 70, 105)
+        title.ZIndex = 2147483002
+        title.Parent = card
+
+        local subtitle = Instance.new("TextLabel")
+        subtitle.AnchorPoint = Vector2.new(0.5, 0)
+        subtitle.Position = UDim2.new(0.5, 0, 0.5, 50)
+        subtitle.Size = UDim2.new(1, -40, 0, 24)
+        subtitle.BackgroundTransparency = 1
+        subtitle.Font = Enum.Font.Gotham
+        subtitle.Text = "Preparando interfaz..."
+        subtitle.TextSize = 12
+        subtitle.TextColor3 = Color3.fromRGB(185, 185, 195)
+        subtitle.ZIndex = 2147483002
+        subtitle.Parent = card
+
+        State.pulseTween = TweenService:Create(
+            logo,
+            TweenInfo.new(
+                0.75,
+                Enum.EasingStyle.Sine,
+                Enum.EasingDirection.InOut,
+                -1,
+                true
+            ),
+            {
+                ImageTransparency = 0.32
+            }
+        )
+        State.pulseTween:Play()
     end
 
-    local title = Instance.new("TextLabel")
-    title.AnchorPoint = Vector2.new(0.5, 0)
-    title.Position = UDim2.new(0.5, 0, 0.5, 18)
-    title.Size = UDim2.new(1, -40, 0, 30)
-    title.BackgroundTransparency = 1
-    title.Font = Enum.Font.GothamBold
-    title.Text = "CARGANDO DANLOHUB ANIMATIONS..."
-    title.TextSize = 15
-    title.TextColor3 = Color3.fromRGB(255, 70, 105)
-    title.ZIndex = 2147483002
-    title.Parent = card
+    table.insert(State.loadingGuis, gui)
+    return gui
+end
 
-    local subtitle = Instance.new("TextLabel")
-    subtitle.AnchorPoint = Vector2.new(0.5, 0)
-    subtitle.Position = UDim2.new(0.5, 0, 0.5, 50)
-    subtitle.Size = UDim2.new(1, -40, 0, 24)
-    subtitle.BackgroundTransparency = 1
-    subtitle.Font = Enum.Font.Gotham
-    subtitle.Text = "Preparando interfaz..."
-    subtitle.TextSize = 12
-    subtitle.TextColor3 = Color3.fromRGB(185, 185, 195)
-    subtitle.ZIndex = 2147483002
-    subtitle.Parent = card
+local function showLoading()
+    destroyLoadingLayers()
+    clearLoadingShield()
 
-    State.pulseTween = TweenService:Create(
-        logo,
-        TweenInfo.new(
-            0.75,
-            Enum.EasingStyle.Sine,
-            Enum.EasingDirection.InOut,
-            -1,
-            true
-        ),
-        {
-            ImageTransparency = 0.32
-        }
-    )
+    -- V5: create the black cover in EVERY relevant GUI root.
+    -- This matters because DisplayOrder from a ScreenGui in one root does
+    -- not always dominate a ScreenGui living in another root.
+    local parents = {}
+    local seen = {}
 
-    State.pulseTween:Play()
+    local function addParent(parent)
+        if parent and not seen[parent] then
+            seen[parent] = true
+            table.insert(parents, parent)
+        end
+    end
 
-    -- The important part:
-    -- during loading, disable every other ScreenGui from PlayerGui/gethui.
-    -- This covers buttons that use their own DisplayOrder, like COMBATE.
+    addParent(PlayerGui)
+
+    pcall(function()
+        addParent(CoreGui)
+    end)
+
+    pcall(function()
+        if gethui then
+            addParent(gethui())
+        end
+    end)
+
+    local preferred = getGuiParent()
+    addParent(preferred)
+
+    -- Create blocker layers first.
+    for i, parent in ipairs(parents) do
+        createLoadingLayer(parent, false, i)
+    end
+
+    -- Add the visible card to the preferred/top executor root.
+    local cardLayer = createLoadingLayer(preferred, true, #parents + 1)
+
+    if cardLayer then
+        State.loadingGui = cardLayer
+    elseif State.loadingGuis[1] then
+        State.loadingGui = State.loadingGuis[1]
+    end
+
+    -- Now disable other ScreenGuis while preserving our loading layers.
     startLoadingShield()
 
-    -- A few very cheap delayed passes in case that combat badge updates
-    -- its text/visibility a fraction later.
-    task.delay(0.10, function()
-        if State.loading then
-            shieldCombatOverlaysOnce()
-        end
-    end)
+    -- Targeted cleanup for combat badges, including text that changes
+    -- after the object was already created.
+    task.spawn(function()
+        local passes = 0
 
-    task.delay(0.35, function()
-        if State.loading then
+        while State.loading and State.loadingGui and passes < 40 do
+            passes = passes + 1
             shieldCombatOverlaysOnce()
-        end
-    end)
-
-    task.delay(0.80, function()
-        if State.loading then
-            shieldCombatOverlaysOnce()
+            task.wait(0.10)
         end
     end)
 end
@@ -899,7 +969,7 @@ function Module.Start()
         end)
 
         if not ok then
-            warn("[DanloHub Animations Module v4] Loader:", err)
+            warn("[DanloHub Animations Module v5] Loader:", err)
         end
     end)
 
@@ -926,7 +996,7 @@ function Module.Start()
             State.enabled = false
             hideLoading()
 
-            warn("[DanloHub Animations Module v4] No se encontro la interfaz.")
+            warn("[DanloHub Animations Module v5] No se encontro la interfaz.")
             return
         end
 
