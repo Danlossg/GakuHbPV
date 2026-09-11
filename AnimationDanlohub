@@ -1,4 +1,4 @@
--- DanloHub Animations MODULE v2 - Launcher Safe
+-- DanloHub Animations MODULE v3 - Full Loading Shield
 -- Subelo como: modules/animations.lua
 --
 -- Este archivo NO crea el menu DanloHub +.
@@ -53,6 +53,8 @@ local State = {
     loadingGui = nil,
     pulseTween = nil,
     connections = {},
+    shieldConnections = {},
+    shieldedScreens = setmetatable({}, {__mode = "k"}),
     relatedScreens = setmetatable({}, {__mode = "k"})
 }
 
@@ -247,6 +249,103 @@ local function getLogoAsset()
     return asset
 end
 
+
+local function clearLoadingShield()
+    for _, connection in ipairs(State.shieldConnections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+
+    table.clear(State.shieldConnections)
+
+    for screen, wasEnabled in pairs(State.shieldedScreens) do
+        if screen and screen.Parent and screen ~= State.animScreen then
+            pcall(function()
+                screen.Enabled = wasEnabled
+            end)
+        end
+    end
+
+    State.shieldedScreens = setmetatable({}, {__mode = "k"})
+end
+
+local function shieldScreen(screen)
+    if not screen or not screen:IsA("ScreenGui") then
+        return
+    end
+
+    if State.loadingGui and screen == State.loadingGui then
+        return
+    end
+
+    if State.shieldedScreens[screen] ~= nil then
+        return
+    end
+
+    local wasEnabled = true
+
+    pcall(function()
+        wasEnabled = screen.Enabled
+    end)
+
+    State.shieldedScreens[screen] = wasEnabled
+
+    pcall(function()
+        screen.Enabled = false
+    end)
+end
+
+local function startLoadingShield()
+    clearLoadingShield()
+
+    local shieldRoots = {}
+    local seen = {}
+
+    local function addRoot(root)
+        if root and not seen[root] then
+            seen[root] = true
+            table.insert(shieldRoots, root)
+        end
+    end
+
+    -- PlayerGui contains the game's own buttons such as COMBATE.
+    addRoot(PlayerGui)
+
+    -- Executor GUI root, if available.
+    pcall(function()
+        if gethui then
+            addRoot(gethui())
+        end
+    end)
+
+    for _, root in ipairs(shieldRoots) do
+        -- Hide every existing ScreenGui while loading.
+        if root:IsA("ScreenGui") then
+            shieldScreen(root)
+        else
+            for _, child in ipairs(root:GetChildren()) do
+                if child:IsA("ScreenGui") then
+                    shieldScreen(child)
+                end
+            end
+        end
+
+        -- Also hide ScreenGuis created a fraction later.
+        local connection = root.ChildAdded:Connect(function(child)
+            if State.loading and child:IsA("ScreenGui") then
+                task.defer(function()
+                    if State.loading and child and child.Parent then
+                        shieldScreen(child)
+                    end
+                end)
+            end
+        end)
+
+        table.insert(State.shieldConnections, connection)
+    end
+end
+
 local function hideLoading()
     if State.pulseTween then
         pcall(function()
@@ -263,6 +362,8 @@ local function hideLoading()
 
         State.loadingGui = nil
     end
+
+    clearLoadingShield()
 end
 
 local function showLoading()
@@ -273,6 +374,7 @@ local function showLoading()
     gui.ResetOnSpawn = false
     gui.DisplayOrder = 2147483647
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+    gui.Enabled = true
 
     pcall(function()
         gui.IgnoreGuiInset = true
@@ -282,19 +384,24 @@ local function showLoading()
         gui.ScreenInsets = Enum.ScreenInsets.None
     end)
 
+    pcall(function()
+        gui.ClipToDeviceSafeArea = false
+    end)
+
     gui.Parent = getGuiParent()
     State.loadingGui = gui
 
     local blocker = Instance.new("TextButton")
-    blocker.Size = UDim2.fromScale(1, 1)
-    blocker.Position = UDim2.fromScale(0, 0)
+    blocker.Name = "FULLSCREEN_LOADING_BLOCKER"
+    blocker.Position = UDim2.new(0, -40, 0, -40)
+    blocker.Size = UDim2.new(1, 80, 1, 80)
     blocker.BackgroundColor3 = Color3.fromRGB(7, 7, 10)
     blocker.BackgroundTransparency = 0
     blocker.BorderSizePixel = 0
     blocker.AutoButtonColor = false
     blocker.Text = ""
     blocker.Modal = true
-    blocker.ZIndex = 100
+    blocker.ZIndex = 2147483000
     blocker.Parent = gui
 
     local card = Instance.new("Frame")
@@ -303,7 +410,7 @@ local function showLoading()
     card.Size = UDim2.fromOffset(480, 280)
     card.BackgroundColor3 = Color3.fromRGB(14, 14, 18)
     card.BorderSizePixel = 0
-    card.ZIndex = 101
+    card.ZIndex = 2147483001
     card.Parent = blocker
     addCorner(card, 14)
 
@@ -319,7 +426,7 @@ local function showLoading()
     logo.Size = UDim2.fromOffset(78, 78)
     logo.BackgroundTransparency = 1
     logo.BorderSizePixel = 0
-    logo.ZIndex = 102
+    logo.ZIndex = 2147483002
     logo.Parent = card
     addCorner(logo, 16)
 
@@ -338,7 +445,7 @@ local function showLoading()
     title.Text = "CARGANDO DANLOHUB ANIMATIONS..."
     title.TextSize = 15
     title.TextColor3 = Color3.fromRGB(255, 70, 105)
-    title.ZIndex = 102
+    title.ZIndex = 2147483002
     title.Parent = card
 
     local subtitle = Instance.new("TextLabel")
@@ -350,7 +457,7 @@ local function showLoading()
     subtitle.Text = "Preparando interfaz..."
     subtitle.TextSize = 12
     subtitle.TextColor3 = Color3.fromRGB(185, 185, 195)
-    subtitle.ZIndex = 102
+    subtitle.ZIndex = 2147483002
     subtitle.Parent = card
 
     State.pulseTween = TweenService:Create(
@@ -368,6 +475,11 @@ local function showLoading()
     )
 
     State.pulseTween:Play()
+
+    -- The important part:
+    -- during loading, disable every other ScreenGui from PlayerGui/gethui.
+    -- This covers buttons that use their own DisplayOrder, like COMBATE.
+    startLoadingShield()
 end
 
 local function findBundleScreen()
@@ -631,6 +743,8 @@ function Module.Start()
                 existing.Enabled = false
             end)
 
+            State.shieldedScreens[existing] = nil
+
             patchHeader(existing, title)
             cleanupExtras()
             attachTitleProtection()
@@ -665,7 +779,7 @@ function Module.Start()
         end)
 
         if not ok then
-            warn("[DanloHub Animations Module v2] Loader:", err)
+            warn("[DanloHub Animations Module v3] Loader:", err)
         end
     end)
 
@@ -692,13 +806,16 @@ function Module.Start()
             State.enabled = false
             hideLoading()
 
-            warn("[DanloHub Animations Module v2] No se encontro la interfaz.")
+            warn("[DanloHub Animations Module v3] No se encontro la interfaz.")
             return
         end
 
         pcall(function()
             screen.Enabled = false
         end)
+
+        -- This one is intentionally controlled by the module itself.
+        State.shieldedScreens[screen] = nil
 
         for _ = 1, 5 do
             patchHeader(screen, title)
@@ -805,4 +922,4 @@ function Module.IsLoading()
     return State.loading == true
 end
 
-return Module
+return 
