@@ -1,4 +1,4 @@
--- DanloHub Animations MODULE v6 - TgPromo Block + Chat-Safe Loading
+-- DanloHub Animations MODULE v7 - TgPromo Block + Native UI Input Safe
 -- Subelo como: modules/animations.lua
 --
 -- Este archivo NO crea el menu DanloHub +.
@@ -72,6 +72,22 @@ if type(oldState) == "table" then
                     obj.Visible = wasVisible
                 end
             end)
+        end
+    end
+
+    if oldState.pulseTween then
+        pcall(function()
+            oldState.pulseTween:Cancel()
+        end)
+    end
+
+    if type(oldState.loadingGuis) == "table" then
+        for _, oldGui in ipairs(oldState.loadingGuis) do
+            if oldGui and oldGui.Parent then
+                pcall(function()
+                    oldGui:Destroy()
+                end)
+            end
         end
     end
 end
@@ -492,9 +508,26 @@ local function destroyLoadingLayers()
     State.loadingGui = nil
 end
 
+local function purgeOldLoadingCovers()
+    -- Pasada finita; elimina covers huerfanos de cualquier version.
+    for _, root in ipairs(getRoots()) do
+        for _, obj in ipairs(root:GetDescendants()) do
+            if obj:IsA("ScreenGui") then
+                local name = tostring(obj.Name or "")
+                if string.find(name, "DanloHubAnimationsLoadingCover", 1, true) == 1 then
+                    pcall(function()
+                        obj:Destroy()
+                    end)
+                end
+            end
+        end
+    end
+end
+
 local function hideLoading()
     destroyLoadingLayers()
     clearLoadingShield()
+    purgeOldLoadingCovers()
 end
 
 local function createLoadingLayer(parent, withCard, index)
@@ -503,7 +536,7 @@ local function createLoadingLayer(parent, withCard, index)
     end
 
     local gui = Instance.new("ScreenGui")
-    gui.Name = "DanloHubAnimationsLoadingCoverV5_" .. tostring(index)
+    gui.Name = "DanloHubAnimationsLoadingCoverV7_" .. tostring(index)
     gui.ResetOnSpawn = false
     gui.DisplayOrder = 2147483647
     gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
@@ -532,16 +565,15 @@ local function createLoadingLayer(parent, withCard, index)
         return nil
     end
 
-    local blocker = Instance.new("TextButton")
-    blocker.Name = "ABSOLUTE_FULLSCREEN_BLOCKER"
+    -- V7: cobertura puramente visual. No puede capturar ESC/chat.
+    local blocker = Instance.new("Frame")
+    blocker.Name = "ABSOLUTE_FULLSCREEN_COVER"
     blocker.Position = UDim2.new(0, -80, 0, -80)
     blocker.Size = UDim2.new(1, 160, 1, 160)
     blocker.BackgroundColor3 = Color3.fromRGB(7, 7, 10)
     blocker.BackgroundTransparency = 0
     blocker.BorderSizePixel = 0
-    blocker.AutoButtonColor = false
-    blocker.Text = ""
-    blocker.Modal = true
+    blocker.Active = false
     blocker.ZIndex = 2147483000
     blocker.Parent = gui
 
@@ -624,6 +656,7 @@ end
 local function showLoading()
     destroyLoadingLayers()
     clearLoadingShield()
+    purgeOldLoadingCovers()
 
     -- V5: create the black cover in EVERY relevant GUI root.
     -- This matters because DisplayOrder from a ScreenGui in one root does
@@ -931,7 +964,14 @@ local function isPromo(text)
 end
 
 local function cleanupExtras()
-    for _, root in ipairs(getRoots()) do
+    -- V7: no escanear PlayerGui/CoreGui completos buscando promos.
+    -- La promo confirmada vive dentro de BundleAnimGui.
+    local promoRoots = {}
+    if State.animScreen and State.animScreen.Parent then
+        promoRoots[1] = State.animScreen
+    end
+
+    for _, root in ipairs(promoRoots) do
         local framesToHide = {}
 
         for _, obj in ipairs(root:GetDescendants()) do
@@ -1028,6 +1068,8 @@ local function attachTitleProtection()
 end
 
 function Module.Start()
+    purgeOldLoadingCovers()
+
     if State.loading then
         return false, "loading"
     end
@@ -1041,20 +1083,13 @@ function Module.Start()
             State.enabled = true
             State.loading = false
 
-            pcall(function()
-                existing.Enabled = false
-            end)
-
+            -- V7: no alternar Enabled del BundleAnimGui.
             State.shieldedScreens[existing] = nil
 
             patchHeader(existing, title)
             attachPromoBlocker(existing)
             cleanupExtras()
             attachTitleProtection()
-
-            pcall(function()
-                existing.Enabled = true
-            end)
 
             if State.animMain then
                 State.animMain.Visible = true
@@ -1082,7 +1117,7 @@ function Module.Start()
         end)
 
         if not ok then
-            warn("[DanloHub Animations Module v6] Loader:", err)
+            warn("[DanloHub Animations Module v7] Loader:", err)
         end
     end)
 
@@ -1109,15 +1144,11 @@ function Module.Start()
             State.enabled = false
             hideLoading()
 
-            warn("[DanloHub Animations Module v6] No se encontro la interfaz.")
+            warn("[DanloHub Animations Module v7] No se encontro la interfaz.")
             return
         end
 
-        pcall(function()
-            screen.Enabled = false
-        end)
-
-        -- This one is intentionally controlled by the module itself.
+        -- V7: no desactivar el ScreenGui original durante el parcheo.
         State.shieldedScreens[screen] = nil
 
         for _ = 1, 5 do
@@ -1140,10 +1171,6 @@ function Module.Start()
         cleanupExtras()
         attachPromoBlocker(screen)
 
-        pcall(function()
-            screen.Enabled = true
-        end)
-
         if State.animMain then
             State.animMain.Visible = true
         end
@@ -1160,6 +1187,8 @@ function Module.Start()
 end
 
 function Module.Open()
+    purgeOldLoadingCovers()
+
     if not State.enabled then
         return Module.Start()
     end
