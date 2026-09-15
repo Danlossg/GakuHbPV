@@ -1,4 +1,4 @@
--- DanloHub Animations MODULE v5 - MultiLayer Loading Shield
+-- DanloHub Animations MODULE v6 - TgPromo Block + Chat-Safe Loading
 -- Subelo como: modules/animations.lua
 --
 -- Este archivo NO crea el menu DanloHub +.
@@ -36,11 +36,43 @@ local LOADING_NAME = "DanloHubAnimations_ModuleLoading"
 
 local oldState = ENV[STATE_KEY]
 
-if type(oldState) == "table" and type(oldState.connections) == "table" then
-    for _, connection in ipairs(oldState.connections) do
-        pcall(function()
-            connection:Disconnect()
-        end)
+-- Limpia conexiones y restaura cualquier GUI que una version anterior
+-- haya dejado temporalmente apagada/oculta.
+if type(oldState) == "table" then
+    for _, listName in ipairs({
+        "connections",
+        "shieldConnections",
+        "promoConnections"
+    }) do
+        local list = oldState[listName]
+
+        if type(list) == "table" then
+            for _, connection in ipairs(list) do
+                pcall(function()
+                    connection:Disconnect()
+                end)
+            end
+        end
+    end
+
+    if type(oldState.shieldedScreens) == "table" then
+        for screen, wasEnabled in pairs(oldState.shieldedScreens) do
+            pcall(function()
+                if screen and screen.Parent then
+                    screen.Enabled = wasEnabled
+                end
+            end)
+        end
+    end
+
+    if type(oldState.shieldedObjects) == "table" then
+        for obj, wasVisible in pairs(oldState.shieldedObjects) do
+            pcall(function()
+                if obj and obj.Parent then
+                    obj.Visible = wasVisible
+                end
+            end)
+        end
     end
 end
 
@@ -55,6 +87,8 @@ local State = {
     pulseTween = nil,
     connections = {},
     shieldConnections = {},
+    promoConnections = {},
+    promoTarget = nil,
     shieldedScreens = setmetatable({}, {__mode = "k"}),
     shieldedObjects = setmetatable({}, {__mode = "k"}),
     relatedScreens = setmetatable({}, {__mode = "k"})
@@ -391,6 +425,11 @@ end
 local function startLoadingShield()
     clearLoadingShield()
 
+    -- V6 CHAT-SAFE:
+    -- NO desactivamos ScreenGui de PlayerGui/CoreGui/gethui.
+    -- Las capas negras creadas por showLoading() ya cubren visualmente
+    -- la pantalla. Apagar las GUI del juego puede romper chats/UI
+    -- que reconstruyen estado mientras estan Disabled.
     local shieldRoots = {}
     local seen = {}
 
@@ -401,11 +440,7 @@ local function startLoadingShield()
         end
     end
 
-    -- PlayerGui contains normal game interfaces.
     addRoot(PlayerGui)
-
-    -- CoreGui/gethui can contain executor/custom interfaces such as
-    -- the SIN COMBATE button seen above the loading screen.
     addRoot(CoreGui)
 
     pcall(function()
@@ -414,33 +449,9 @@ local function startLoadingShield()
         end
     end)
 
+    -- Solo vigilamos overlays concretos de combate durante la carga.
+    -- Es por eventos; no hay Heartbeat ni scan continuo de todas las GUI.
     for _, root in ipairs(shieldRoots) do
-        -- Hide every existing ScreenGui while loading.
-        if root:IsA("ScreenGui") then
-            shieldScreen(root)
-        else
-            for _, child in ipairs(root:GetChildren()) do
-                if child:IsA("ScreenGui") then
-                    shieldScreen(child)
-                end
-            end
-        end
-
-        -- Also hide ScreenGuis created a fraction later.
-        local connection = root.ChildAdded:Connect(function(child)
-            if State.loading and child:IsA("ScreenGui") then
-                task.defer(function()
-                    if State.loading and child and child.Parent then
-                        shieldScreen(child)
-                    end
-                end)
-            end
-        end)
-
-        table.insert(State.shieldConnections, connection)
-
-        -- TEMPORARY during loading only: catch nested combat overlays
-        -- created inside an already-existing ScreenGui.
         local descendantConnection = root.DescendantAdded:Connect(function(obj)
             if State.loading and shouldShieldCombatObject(obj) then
                 task.defer(function()
@@ -448,6 +459,7 @@ local function startLoadingShield()
                         shieldGuiObject(obj)
 
                         local parent = obj.Parent
+
                         if parent and parent:IsA("GuiObject") then
                             shieldGuiObject(parent)
                         end
@@ -459,7 +471,6 @@ local function startLoadingShield()
         table.insert(State.shieldConnections, descendantConnection)
     end
 
-    -- Hide combat overlays that already existed before loading started.
     shieldCombatOverlaysOnce()
 end
 
@@ -796,6 +807,107 @@ local function patchHeader(screen, title)
     return true
 end
 
+------------------------------------------------
+-- BLOQUEO DIRECTO DE TGPROMO
+-- Ruta confirmada por checker:
+-- CoreGui.RobloxGui.BundleAnimGui.TgPromo
+--
+-- Sin loops: solo escucha Visible y recreaciones del frame.
+------------------------------------------------
+
+local function clearPromoBlocker()
+    for _, connection in ipairs(State.promoConnections) do
+        pcall(function()
+            connection:Disconnect()
+        end)
+    end
+
+    table.clear(State.promoConnections)
+    State.promoTarget = nil
+end
+
+local function forcePromoHidden(promo)
+    if not promo
+        or not promo.Parent
+        or not promo:IsA("GuiObject") then
+        return
+    end
+
+    pcall(function()
+        promo.Visible = false
+        promo.Active = false
+    end)
+end
+
+local function attachPromoBlocker(screen)
+    clearPromoBlocker()
+
+    if not screen
+        or not screen.Parent
+        or not screen:IsA("ScreenGui") then
+        return
+    end
+
+    local function hookPromo(promo)
+        if not promo
+            or not promo.Parent
+            or not promo:IsA("GuiObject") then
+            return
+        end
+
+        -- Evita duplicar conexion al mismo TgPromo.
+        if State.promoTarget == promo then
+            forcePromoHidden(promo)
+            return
+        end
+
+        State.promoTarget = promo
+        forcePromoHidden(promo)
+
+        local visibleConnection =
+            promo:GetPropertyChangedSignal("Visible"):Connect(function()
+                if State.promoTarget ~= promo
+                    or not promo.Parent then
+                    return
+                end
+
+                if promo.Visible then
+                    forcePromoHidden(promo)
+                end
+            end)
+
+        table.insert(State.promoConnections, visibleConnection)
+
+        local ancestryConnection =
+            promo.AncestryChanged:Connect(function(_, parent)
+                if State.promoTarget == promo and parent == nil then
+                    State.promoTarget = nil
+                end
+            end)
+
+        table.insert(State.promoConnections, ancestryConnection)
+    end
+
+    local existingPromo = screen:FindFirstChild("TgPromo", true)
+
+    if existingPromo then
+        hookPromo(existingPromo)
+    end
+
+    local addedConnection =
+        screen.DescendantAdded:Connect(function(obj)
+            if obj.Name == "TgPromo" then
+                task.defer(function()
+                    if obj and obj.Parent then
+                        hookPromo(obj)
+                    end
+                end)
+            end
+        end)
+
+    table.insert(State.promoConnections, addedConnection)
+end
+
 local PROMO_WORDS = {
     "t.me/arceusxcommunity",
     "join my channel",
@@ -936,6 +1048,7 @@ function Module.Start()
             State.shieldedScreens[existing] = nil
 
             patchHeader(existing, title)
+            attachPromoBlocker(existing)
             cleanupExtras()
             attachTitleProtection()
 
@@ -969,7 +1082,7 @@ function Module.Start()
         end)
 
         if not ok then
-            warn("[DanloHub Animations Module v5] Loader:", err)
+            warn("[DanloHub Animations Module v6] Loader:", err)
         end
     end)
 
@@ -996,7 +1109,7 @@ function Module.Start()
             State.enabled = false
             hideLoading()
 
-            warn("[DanloHub Animations Module v5] No se encontro la interfaz.")
+            warn("[DanloHub Animations Module v6] No se encontro la interfaz.")
             return
         end
 
@@ -1013,6 +1126,11 @@ function Module.Start()
             task.wait(0.08)
         end
 
+        -- El checker confirmo que el anuncio vive en:
+        -- BundleAnimGui.TgPromo
+        -- Lo bloqueamos antes de volver a mostrar la interfaz.
+        attachPromoBlocker(screen)
+
         State.enabled = true
         State.loading = false
 
@@ -1020,6 +1138,7 @@ function Module.Start()
 
         patchHeader(screen, title)
         cleanupExtras()
+        attachPromoBlocker(screen)
 
         pcall(function()
             screen.Enabled = true
@@ -1046,6 +1165,10 @@ function Module.Open()
     end
 
     if State.animMain and State.animMain.Parent then
+        if State.animScreen and State.animScreen.Parent then
+            attachPromoBlocker(State.animScreen)
+        end
+
         cleanupExtras()
         State.animMain.Visible = true
         return true
@@ -1087,6 +1210,7 @@ function Module.Destroy()
 
     hideLoading()
     clearConnections()
+    clearPromoBlocker()
 
     if State.animScreen
         and State.animScreen.Parent
